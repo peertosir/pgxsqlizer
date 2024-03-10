@@ -2,63 +2,73 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 )
 
 const (
 	sqlSuffix         = ".sql"
 	titleSplitter     = "title:"
-	funcGenTmpl       = "\nfunc %s(%s) (string, pgx.NamesArgs) {\n\treturn %sStmtMap[\"%s\"], pgx.NamedArgs{\n%s\n\t}\n}\n"
-	packageHeaderTmpl = "package pgxsqlizer\n\n"
-	genFilePostfix    = "_actions.go"
-	stmtMapTmpl       = "\t\"%s\": \"%s\",\n"
-	funcArgTmpl       = "%s %s"
-	namedArgTmpl      = "\t\t\"%s\": %s,"
-	mapStmtTmpl       = "var %sStmtMap = map[string]string{\n%s}\n"
-	importPgxStmt     = "import \"github.com/jackc/pgx/v5\"\n\n"
+	addImportSplitter = "addimport:"
+	genFilePostfix    = "_actions_gen.go"
+	pkgForGenFiles    = "actionsgen"
+	stmtMapSuffix     = "StmtMap"
 )
 
 var (
-	stmtTitleRegExp = regexp.MustCompile(fmt.Sprintf(`^--\s*%s.*`, titleSplitter))
-	stmtArgValue    = regexp.MustCompile(`@\S*:\S*@`)
+	stmtTitleRegExp    = regexp.MustCompile(fmt.Sprintf(`^--\s*%s.*`, titleSplitter))
+	addImportRegExp    = regexp.MustCompile(fmt.Sprintf(`^--\s*%s.*`, addImportSplitter))
+	stmtArgValueRegExp = regexp.MustCompile(`@\S*:\S*@`)
+
+	AvailablePlaceholders = []string{atPlaceholderType, questionPlaceholderType, dollarPlaceholderType}
+	AvailableReturnTypes  = []string{mapReturnType, sliceReturnType}
 )
 
 type config struct {
-	inFolder  string
-	outFolder string
+	inFolder        string
+	outFolder       string
+	genPkg          string
+	returnType      string
+	placeholderType string
 }
 
 func main() {
 	var cfg config
-	flag.StringVar(&cfg.inFolder, "input", "", "folder to scan for sql files")
-	flag.StringVar(&cfg.outFolder, "output", "", "folder to put files with generated functions")
+	flag.StringVar(&cfg.inFolder, "input", ".", "folder to scan for sql files")
+	flag.StringVar(&cfg.outFolder, "output", ".", "folder to put files with generated functions")
+	flag.StringVar(
+		&cfg.placeholderType, "placeholder", "$",
+		"placeholder which will be user in sql queries: [@|?|$]. @ => @<string>; ? => ?; $ => $<int>."+
+			"'@' is only suitable for 'map' RT. Others are only suitable for 'slice' RT.",
+	)
+	flag.StringVar(&cfg.genPkg, "genPkg", pkgForGenFiles, "folder/package for generated files")
+	flag.StringVar(
+		&cfg.returnType, "returnType", "slice",
+		"(RT). Generated function return type for stmt params [map|slice]. Default is slice",
+	)
 	flag.Parse()
 
-	if len(strings.TrimSpace(cfg.inFolder)) == 0 {
-		panic("cannot find folder for sql scan")
-	}
+	checkValidOptions(cfg)
 
-	result := map[string]map[string]string{}
+	result := map[string]TemplateData{}
 
 	err := filepath.Walk(cfg.inFolder, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			fmt.Printf("Error: %v\n", err)
 			return err
 		}
 
 		if strings.HasSuffix(info.Name(), sqlSuffix) {
 			formattedName := strings.TrimSuffix(info.Name(), sqlSuffix)
 			if _, ok := result[formattedName]; !ok {
-				data, err := parseSQLFile(path)
-				if err != nil {
-					fmt.Printf("cannot parse SQL File with path = %s: %v\n", path, err)
-					return err
-				}
+				data := parseSQLFile(formattedName, path, cfg.returnType, cfg.placeholderType, cfg.genPkg)
 				result[formattedName] = data
 			}
 		}
@@ -66,34 +76,48 @@ func main() {
 	})
 
 	if err != nil {
-		fmt.Printf("cannot walk input dir: error = %v\n", err)
-		panic(err)
+		log.Fatalf("cannot walk input dir: error = %v\n", err)
 	}
 
-	outputDir := filepath.Join(cfg.outFolder, "pgxsqlizer")
+	outputDir := filepath.Join(cfg.outFolder, cfg.genPkg)
 	if _, err := os.Stat(outputDir); os.IsNotExist(err) {
-		err = os.Mkdir(outputDir, 0777)
-		if err != nil {
-			fmt.Printf("cannot create folder for generated files: %v\n", err)
-			panic(err)
-		}
+		log.Println("directory for actions will be automatically created")
 	} else if err != nil {
-		fmt.Printf("unexpected os error: %v\n", err)
-		panic(err)
+		log.Fatalf("unexpected os error: %v\n", err)
+	} else {
+		os.RemoveAll(outputDir)
+	}
+	err = os.Mkdir(outputDir, 0777)
+	if err != nil {
+		log.Fatalf("cannot create folder for generated files: %v\n", err)
 	}
 
-	for fileName, queries := range result {
-		generateFile(outputDir, fileName, queries)
+	for name, data := range result {
+		var dataBuffer bytes.Buffer
+		data.GenPackage = pkgForGenFiles
+		err = generatedActionsFileTmpl.Execute(&dataBuffer, data)
+		if err != nil {
+			log.Fatal(err)
+		}
+		filePath := filepath.Join(outputDir, name+genFilePostfix)
+		err = os.WriteFile(filePath, dataBuffer.Bytes(), 0777)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 }
 
-func parseSQLFile(path string) (map[string]string, error) {
-	result := map[string]string{}
+func parseSQLFile(name, path, returnType, placeholderType, genPkg string) TemplateData {
+	genReturnType := NewGenFuncReturnType(returnType)
+	result := TemplateData{
+		StmtItems:       map[string]StmtItem{},
+		ReturnValueType: genReturnType.Signature,
+		GenPackage:      genPkg,
+	}
 	readFile, err := os.Open(path)
 
 	if err != nil {
-		fmt.Printf("cannot open sql file with path: %v", path)
-		return nil, err
+		log.Fatalf("cannot open sql file with path: %v", path)
 	}
 	scn := bufio.NewScanner(readFile)
 	scn.Split(bufio.ScanLines)
@@ -106,9 +130,11 @@ func parseSQLFile(path string) (map[string]string, error) {
 
 		if len(scannedText) == 0 {
 			continue
+		} else if addImportRegExp.MatchString(scannedText) {
+			result.ImportPackages = append(result.ImportPackages, getImportStmt(scannedText))
 		} else if stmtTitleRegExp.MatchString(scannedText) {
 			if len(sqlStmtTitle) != 0 {
-				result[sqlStmtTitle] = strings.Join(sqlStmtAccum, " ")
+				result.StmtItems[sqlStmtTitle] = getStmtItem(sqlStmtTitle, strings.Join(sqlStmtAccum, " "), placeholderType, genReturnType)
 			}
 			sqlStmtTitle = getStmtTitle(scannedText)
 			sqlStmtAccum = []string{}
@@ -116,52 +142,86 @@ func parseSQLFile(path string) (map[string]string, error) {
 			sqlStmtAccum = append(sqlStmtAccum, scannedText)
 		}
 	}
-
-	result[sqlStmtTitle] = strings.Join(sqlStmtAccum, " ")
+	result.StmtItems[sqlStmtTitle] = getStmtItem(sqlStmtTitle, strings.Join(sqlStmtAccum, " "), placeholderType, genReturnType)
+	result.StmtMapName = name + stmtMapSuffix
 	readFile.Close()
-	return result, nil
+	return result
 }
 
 func getStmtTitle(inp string) string {
 	res := strings.Split(inp, titleSplitter)
 	if len(res) != 2 {
-		panic("sql stmt parse error: " + inp)
+		log.Fatalf("sql stmt parse error: %v\n", inp)
 	}
 	return strings.TrimSpace(res[1])
 }
 
-func generateFile(folderPath, filePrefix string, queries map[string]string) {
-	var stmtMapInnerData string
-	var functionsCode string
-	// package header
-	resultData := packageHeaderTmpl + importPgxStmt
+func getImportStmt(inp string) string {
+	res := strings.Split(inp, addImportSplitter)
+	if len(res) != 2 {
+		log.Fatalf("import stmt parse error: %v\n", inp)
+	}
+	return strings.TrimSpace(res[1])
+}
 
-	// traverse queries for sql file
-	for key, val := range queries {
-		funcName := key
-		funcQuery := val
-		funcArgsWithTypes := []string{}
-		namedArgsItems := []string{}
-
-		valuesToReplace := stmtArgValue.FindAllString(val, -1)
-
-		for _, v := range valuesToReplace {
-			argWithType := strings.Split(strings.ReplaceAll(v, "@", ""), ":")
-			funcArgsWithTypes = append(funcArgsWithTypes, fmt.Sprintf(funcArgTmpl, argWithType[0], argWithType[1]))
-			namedArgsItems = append(namedArgsItems, fmt.Sprintf(namedArgTmpl, argWithType[0], argWithType[0]))
-			funcQuery = strings.Replace(funcQuery, v, "@"+argWithType[0], 1)
-		}
-
-		stmtMapInnerData += fmt.Sprintf(stmtMapTmpl, funcName, funcQuery)
-		functionsCode += fmt.Sprintf(funcGenTmpl, key, strings.Join(funcArgsWithTypes, ", "), filePrefix, funcName, strings.Join(namedArgsItems, "\n"))
+func getStmtItem(
+	name, stmt, placeholderType string,
+	genReturnType *GenFuncReturnType,
+) StmtItem {
+	result := StmtItem{
+		Stmt: stmt,
+		Function: GenFunction{
+			Name: name,
+		},
 	}
 
-	resultData += fmt.Sprintf(mapStmtTmpl, filePrefix, stmtMapInnerData)
-	resultData += functionsCode
-	filePath := filepath.Join(folderPath, filePrefix+genFilePostfix)
-	err := os.WriteFile(filePath, []byte(resultData), 0777)
-	if err != nil {
-		fmt.Printf("cannot write to file with path: %s", filePath)
-		panic(err)
+	funcArgs := []string{}
+	returnValueArgs := []string{}
+
+	valuesToReplace := stmtArgValueRegExp.FindAllString(stmt, -1)
+	count := 1
+	for _, val := range valuesToReplace {
+		argWithType := strings.Split(strings.ReplaceAll(val, "@", ""), ":")
+		funcArgs = append(funcArgs, fmt.Sprintf(funcArgTmpl, argWithType[0], argWithType[1]))
+		if genReturnType.IsMap() {
+			returnValueArgs = append(returnValueArgs, fmt.Sprintf(mapArgTmpl, argWithType[0], argWithType[0]))
+		} else {
+			returnValueArgs = append(returnValueArgs, fmt.Sprintf(sliceArgTmpl, argWithType[0]))
+		}
+		result.Stmt, count = insertPlaceholders(result.Stmt, argWithType[0], val, placeholderType, count)
+		// result.Stmt = strings.Replace(result.Stmt, val, "@"+argWithType[0], 1)
+	}
+
+	result.Function.Args = strings.Join(funcArgs, " ")
+	result.Function.ReturnValueItems = strings.Join(returnValueArgs, " ")
+	return result
+}
+
+func insertPlaceholders(stmt, name, value, placeholderType string, count int) (string, int) {
+	switch placeholderType {
+	case atPlaceholderType:
+		return strings.Replace(stmt, value, atPlaceholderType+name, 1), 0
+	case dollarPlaceholderType:
+		return strings.Replace(stmt, value, dollarPlaceholderType+strconv.Itoa(count), 1), count + 1
+	case questionPlaceholderType:
+		return strings.Replace(stmt, value, questionPlaceholderType, 1), 0
+	default:
+		panic("cannot parse placeholder type")
+	}
+}
+
+func checkValidOptions(cfg config) {
+	if !slices.Contains(AvailablePlaceholders, cfg.placeholderType) {
+		log.Fatal("placeholder value should be valid => [@|?|$]")
+	}
+
+	if !slices.Contains(AvailableReturnTypes, cfg.returnType) {
+		log.Fatal("return types value should be valid => [map|slice]")
+	}
+
+	if (cfg.returnType == mapReturnType &&
+		(cfg.placeholderType == questionPlaceholderType || cfg.returnType == dollarPlaceholderType)) ||
+		(cfg.returnType == sliceReturnType && cfg.placeholderType == atPlaceholderType) {
+		log.Fatal("incompatible return type and placeholder type")
 	}
 }
