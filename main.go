@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -20,7 +22,6 @@ const (
 	addImportSplitter = "addimport:"
 	genFilePostfix    = "_actions_gen.go"
 	pkgForGenFiles    = "actionsgen"
-	stmtMapSuffix     = "StmtMap"
 )
 
 var (
@@ -134,7 +135,10 @@ func parseSQLFile(name, path, returnType, placeholderType, genPkg string) Templa
 			result.ImportPackages = append(result.ImportPackages, getImportStmt(scannedText))
 		} else if stmtTitleRegExp.MatchString(scannedText) {
 			if len(sqlStmtTitle) != 0 {
-				result.StmtItems[sqlStmtTitle] = getStmtItem(sqlStmtTitle, strings.Join(sqlStmtAccum, " "), placeholderType, genReturnType)
+				result.StmtItems[firstLetterToLower(sqlStmtTitle)] = getStmtItem(
+					sqlStmtTitle, strings.Join(sqlStmtAccum, " "),
+					placeholderType, genReturnType,
+				)
 			}
 			sqlStmtTitle = getStmtTitle(scannedText)
 			sqlStmtAccum = []string{}
@@ -142,8 +146,10 @@ func parseSQLFile(name, path, returnType, placeholderType, genPkg string) Templa
 			sqlStmtAccum = append(sqlStmtAccum, scannedText)
 		}
 	}
-	result.StmtItems[sqlStmtTitle] = getStmtItem(sqlStmtTitle, strings.Join(sqlStmtAccum, " "), placeholderType, genReturnType)
-	result.StmtMapName = name + stmtMapSuffix
+	result.StmtItems[firstLetterToLower(sqlStmtTitle)] = getStmtItem(
+		sqlStmtTitle, strings.Join(sqlStmtAccum, " "),
+		placeholderType, genReturnType,
+	)
 	readFile.Close()
 	return result
 }
@@ -153,7 +159,8 @@ func getStmtTitle(inp string) string {
 	if len(res) != 2 {
 		log.Fatalf("sql stmt parse error: %v\n", inp)
 	}
-	return strings.TrimSpace(res[1])
+	title := strings.TrimSpace(res[1])
+	return title
 }
 
 func getImportStmt(inp string) string {
@@ -181,20 +188,27 @@ func getStmtItem(
 	valuesToReplace := stmtArgValueRegExp.FindAllString(stmt, -1)
 	count := 1
 	for _, val := range valuesToReplace {
-		argWithType := strings.Split(strings.ReplaceAll(val, "@", ""), ":")
-		funcArgs = append(funcArgs, fmt.Sprintf(funcArgTmpl, argWithType[0], argWithType[1]))
+		argName, argType := getArgumentData(val)
+		funcArgs = append(funcArgs, fmt.Sprintf(funcArgTmpl, argName, argType))
 		if genReturnType.IsMap() {
-			returnValueArgs = append(returnValueArgs, fmt.Sprintf(mapArgTmpl, argWithType[0], argWithType[0]))
+			returnValueArgs = append(returnValueArgs, fmt.Sprintf(mapArgTmpl, argName, argName))
 		} else {
-			returnValueArgs = append(returnValueArgs, fmt.Sprintf(sliceArgTmpl, argWithType[0]))
+			returnValueArgs = append(returnValueArgs, fmt.Sprintf(sliceArgTmpl, argName))
 		}
-		result.Stmt, count = insertPlaceholders(result.Stmt, argWithType[0], val, placeholderType, count)
-		// result.Stmt = strings.Replace(result.Stmt, val, "@"+argWithType[0], 1)
+		result.Stmt, count = insertPlaceholders(result.Stmt, argName, val, placeholderType, count)
 	}
 
 	result.Function.Args = strings.Join(funcArgs, " ")
 	result.Function.ReturnValueItems = strings.Join(returnValueArgs, " ")
 	return result
+}
+
+func getArgumentData(input string) (string, string) {
+	argData := strings.Split(strings.ReplaceAll(input, "@", ""), ":")
+	if len(argData) != 2 {
+		log.Fatalf("argument formatting is incorrect: %s", input)
+	}
+	return argData[0], argData[1]
 }
 
 func insertPlaceholders(stmt, name, value, placeholderType string, count int) (string, int) {
@@ -224,4 +238,16 @@ func checkValidOptions(cfg config) {
 		(cfg.returnType == sliceReturnType && cfg.placeholderType == atPlaceholderType) {
 		log.Fatal("incompatible return type and placeholder type")
 	}
+}
+
+func firstLetterToLower(s string) string {
+	r, size := utf8.DecodeRuneInString(s)
+	if r == utf8.RuneError && size <= 1 {
+		return s
+	}
+	lc := unicode.ToLower(r)
+	if r == lc {
+		return s
+	}
+	return string(lc) + s[size:]
 }

@@ -22,7 +22,6 @@ type StmtItem struct {
 }
 
 type TemplateData struct {
-	StmtMapName     string
 	StmtItems       map[string]StmtItem
 	ReturnValueType string
 	GenPackage      string

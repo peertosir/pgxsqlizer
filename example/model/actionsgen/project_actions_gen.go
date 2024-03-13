@@ -4,17 +4,14 @@ package actionsgen
 import (
 	"time"
 )
-
-var projectStmtMap = map[string]string{	
-	"GetProjects": "select * from projects where id = $1;",	
-	"InsertProjects": "insert into projects( id, title, description, createdAt ) values ( $1, $2, $3, $4 );",
-}
-
+	
+const getProjects = "select * from projects where id = $1;"	
+const insertProjects = "insert into projects( id, title, description, createdAt ) values ( $1, $2, $3, $4 );"
 
 func GetProjects(
 	projectID string,
 ) (string, []any) {
-	return projectStmtMap["GetProjects"], []any{
+	return getProjects, []any{
 		projectID,
 	}
 }
@@ -22,7 +19,7 @@ func GetProjects(
 func InsertProjects(
 	projectID string, projectTitle string, projectDescription string, createdAt time.Duration,
 ) (string, []any) {
-	return projectStmtMap["InsertProjects"], []any{
+	return insertProjects, []any{
 		projectID, projectTitle, projectDescription, createdAt,
 	}
 }

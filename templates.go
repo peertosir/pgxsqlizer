@@ -17,17 +17,14 @@ import (
 {{- end }}
 )
 {{ end }}
-var {{ .StmtMapName }} = map[string]string{
 {{- range $name, $data := .StmtItems }}	
-	"{{ $name }}": "{{ $data.Stmt }}",
+const {{ $name }} = "{{ $data.Stmt }}"
 {{- end}}
-}
-
 {{ range $name, $data := .StmtItems }}
 func {{ $data.Function.Name }}(
 	{{ $data.Function.Args }}
 ) (string, {{ $.ReturnValueType }}) {
-	return {{ $.StmtMapName }}["{{ $name }}"], {{ $.ReturnValueType }}{
+	return {{ $name }}, {{ $.ReturnValueType }}{
 		{{ $data.Function.ReturnValueItems }}
 	}
 }
