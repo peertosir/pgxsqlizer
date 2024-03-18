@@ -83,14 +83,12 @@ func main() {
 	outputDir := filepath.Join(cfg.outFolder, cfg.genPkg)
 	if _, err := os.Stat(outputDir); os.IsNotExist(err) {
 		log.Println("directory for actions will be automatically created")
+		err = os.Mkdir(outputDir, 0777)
+		if err != nil {
+			log.Fatalf("cannot create folder for generated files: %v\n", err)
+		}
 	} else if err != nil {
 		log.Fatalf("unexpected os error: %v\n", err)
-	} else {
-		os.RemoveAll(outputDir)
-	}
-	err = os.Mkdir(outputDir, 0777)
-	if err != nil {
-		log.Fatalf("cannot create folder for generated files: %v\n", err)
 	}
 
 	for name, data := range result {

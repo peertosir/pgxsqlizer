@@ -5,22 +5,22 @@ import (
 	"time"
 )
 	
-const getProjects = "select * from projects where id = $1;"	
-const insertProjects = "insert into projects( id, title, description, createdAt ) values ( $1, $2, $3, $4 );"
+const getProjects = "select * from projects where id = @projectID;"	
+const insertProjects = "insert into projects( id, title, description, createdAt ) values ( @projectID, @projectTitle, @projectDescription, @createdAt );"
 
 func GetProjects(
 	projectID string,
-) (string, []any) {
-	return getProjects, []any{
-		projectID,
+) (string, map[string]any) {
+	return getProjects, map[string]any{
+		"projectID": projectID,
 	}
 }
 
 func InsertProjects(
 	projectID string, projectTitle string, projectDescription string, createdAt time.Duration,
-) (string, []any) {
-	return insertProjects, []any{
-		projectID, projectTitle, projectDescription, createdAt,
+) (string, map[string]any) {
+	return insertProjects, map[string]any{
+		"projectID": projectID, "projectTitle": projectTitle, "projectDescription": projectDescription, "createdAt": createdAt,
 	}
 }
 
