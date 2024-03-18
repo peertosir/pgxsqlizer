@@ -6,10 +6,10 @@ import (
 )
 	
 const getProjects = "select * from projects where id = @projectID;"	
-const insertProjects = "insert into projects( id, title, description, createdAt ) values ( @projectID, @projectTitle, @projectDescription, @createdAt );"
+const insertProjects = "insert into projects( id, title, description, createdAt ) values ( @projectID, @projectTitle, @projectDescription, @createdAt ) where projectId=@projectID;"
 
 func GetProjects(
-	projectID string,
+	 projectID string,
 ) (string, map[string]any) {
 	return getProjects, map[string]any{
 		"projectID": projectID,
@@ -17,7 +17,7 @@ func GetProjects(
 }
 
 func InsertProjects(
-	projectID string, projectTitle string, projectDescription string, createdAt time.Duration,
+	 projectID string, projectTitle string, projectDescription string, createdAt time.Duration,
 ) (string, map[string]any) {
 	return insertProjects, map[string]any{
 		"projectID": projectID, "projectTitle": projectTitle, "projectDescription": projectDescription, "createdAt": createdAt,

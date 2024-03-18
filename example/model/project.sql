@@ -14,4 +14,4 @@ insert into projects(
     @projectTitle:string@,
     @projectDescription:string@,
     @createdAt:time.Duration@
-);
+) where projectId=@projectID:int@;

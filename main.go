@@ -180,23 +180,31 @@ func getStmtItem(
 		},
 	}
 
-	funcArgs := []string{}
+	funcArgs := map[string]string{}
 	returnValueArgs := []string{}
 
 	valuesToReplace := stmtArgValueRegExp.FindAllString(stmt, -1)
 	count := 1
 	for _, val := range valuesToReplace {
 		argName, argType := getArgumentData(val)
-		funcArgs = append(funcArgs, fmt.Sprintf(funcArgTmpl, argName, argType))
-		if genReturnType.IsMap() {
-			returnValueArgs = append(returnValueArgs, fmt.Sprintf(mapArgTmpl, argName, argName))
+		if _, ok := funcArgs[argName]; !ok {
+			funcArgs[argName] = fmt.Sprintf(funcArgTmpl, argName, argType)
+			if genReturnType.IsMap() {
+				returnValueArgs = append(returnValueArgs, fmt.Sprintf(mapArgTmpl, argName, argName))
+			} else {
+				returnValueArgs = append(returnValueArgs, fmt.Sprintf(sliceArgTmpl, argName))
+			}
 		} else {
-			returnValueArgs = append(returnValueArgs, fmt.Sprintf(sliceArgTmpl, argName))
+			data := fmt.Sprintf(funcArgTmpl, argName, argType)
+			if data != funcArgs[argName] {
+				log.Printf("WARNING: different arg types for one var name in stmt: %s\n", name)
+			}
 		}
 		result.Stmt, count = insertPlaceholders(result.Stmt, argName, val, placeholderType, count)
 	}
-
-	result.Function.Args = strings.Join(funcArgs, " ")
+	for _, val := range funcArgs {
+		result.Function.Args += " " + val
+	}
 	result.Function.ReturnValueItems = strings.Join(returnValueArgs, " ")
 	return result
 }
