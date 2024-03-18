@@ -93,7 +93,7 @@ func main() {
 
 	for name, data := range result {
 		var dataBuffer bytes.Buffer
-		data.GenPackage = pkgForGenFiles
+		data.GenPackage = cfg.genPkg
 		err = generatedActionsFileTmpl.Execute(&dataBuffer, data)
 		if err != nil {
 			log.Fatal(err)
@@ -114,6 +114,7 @@ func parseSQLFile(name, path, returnType, placeholderType, genPkg string) Templa
 		GenPackage:      genPkg,
 	}
 	readFile, err := os.Open(path)
+	defer readFile.Close()
 
 	if err != nil {
 		log.Fatalf("cannot open sql file with path: %v", path)
@@ -148,7 +149,6 @@ func parseSQLFile(name, path, returnType, placeholderType, genPkg string) Templa
 		sqlStmtTitle, strings.Join(sqlStmtAccum, " "),
 		placeholderType, genReturnType,
 	)
-	readFile.Close()
 	return result
 }
 
