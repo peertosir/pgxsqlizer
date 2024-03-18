@@ -69,7 +69,7 @@ func main() {
 		if strings.HasSuffix(info.Name(), sqlSuffix) {
 			formattedName := strings.TrimSuffix(info.Name(), sqlSuffix)
 			if _, ok := result[formattedName]; !ok {
-				data := parseSQLFile(formattedName, path, cfg.returnType, cfg.placeholderType, cfg.genPkg)
+				data := parseSQLFile(path, cfg.returnType, cfg.placeholderType, cfg.genPkg)
 				result[formattedName] = data
 			}
 		}
@@ -106,7 +106,7 @@ func main() {
 	}
 }
 
-func parseSQLFile(name, path, returnType, placeholderType, genPkg string) TemplateData {
+func parseSQLFile(path, returnType, placeholderType, genPkg string) TemplateData {
 	genReturnType := NewGenFuncReturnType(returnType)
 	result := TemplateData{
 		StmtItems:       map[string]StmtItem{},
@@ -180,24 +180,20 @@ func getStmtItem(
 		},
 	}
 
-	funcArgs := map[string]string{}
+	funcArgs := []string{}
 	returnValueArgs := []string{}
 
 	valuesToReplace := stmtArgValueRegExp.FindAllString(stmt, -1)
 	count := 1
 	for _, val := range valuesToReplace {
 		argName, argType := getArgumentData(val)
-		if _, ok := funcArgs[argName]; !ok {
-			funcArgs[argName] = fmt.Sprintf(funcArgTmpl, argName, argType)
+		funcArgData := fmt.Sprintf(funcArgTmpl, argName, argType)
+		if !slices.Contains(funcArgs, funcArgData) {
+			funcArgs = append(funcArgs, funcArgData)
 			if genReturnType.IsMap() {
 				returnValueArgs = append(returnValueArgs, fmt.Sprintf(mapArgTmpl, argName, argName))
 			} else {
 				returnValueArgs = append(returnValueArgs, fmt.Sprintf(sliceArgTmpl, argName))
-			}
-		} else {
-			data := fmt.Sprintf(funcArgTmpl, argName, argType)
-			if data != funcArgs[argName] {
-				log.Printf("WARNING: different arg types for one var name in stmt: %s\n", name)
 			}
 		}
 		result.Stmt, count = insertPlaceholders(result.Stmt, argName, val, placeholderType, count)
